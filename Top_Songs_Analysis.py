@@ -4,8 +4,8 @@ import streamlit as st
 import pandas as pd
 import os
 
-CLIENT_ID = os.environ.get('CLIENT_ID')
-CLIENT_SECRET = os.environ.get('CLIENT_SECRET')
+CLIENT_ID = '5d865840417549cc8b9a00ebd3694805'
+CLIENT_SECRET = '7f83017d8f0b43a89dfa7732ad6ca195'
 REDIRECT_URI = "http://localhost:5000"
 
 sp = spotipy.Spotify(
