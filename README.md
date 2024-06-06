@@ -47,7 +47,7 @@ Spotify Top Songs Analysis is a web application that leverages the Spotify API t
    streamlit run Top_Songs_Analysis.py
    ```
    
-###Project Structure
+### Project Structure
 ```sh
 Spotify_Analysis/
 │
@@ -57,5 +57,5 @@ Spotify_Analysis/
 └── README.md               # Project documentation
 ```
 
-##Contact
+## Contact
 For any questions or suggestions, feel free to contact me at dharaniilango1209@gmail.com
