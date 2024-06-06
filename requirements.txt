@@ -1,3 +1,4 @@
 spotipy==2.24.0
 streamlit==1.31.1
 pandas==2.2.1
+plotly==5.22.0
