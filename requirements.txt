@@ -1,5 +1,5 @@
 altair==5.2.0
-pandas==2.2.1
+pandas>=1.0.0
 plotly==5.22.0
 spotipy==2.24.0
 streamlit==1.36.0
