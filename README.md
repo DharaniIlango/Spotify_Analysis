@@ -1,17 +1,21 @@
 # Spotify Top Songs Analysis
 
 ## Project Description
-Spotify Top Songs Analysis is a web application that leverages the Spotify API to provide users with insights into their listening history. The application categorizes users' top songs into short, medium, and long-term periods and displays various audio features such as danceability, energy, and valence.
+The Spotify Analysis Dashboard is a robust application built using Python and Streamlit, designed to provide users with detailed insights into their Spotify usage and music preferences. Leveraging Spotify's API and a range of powerful data visualization libraries, this dashboard offers a comprehensive view of your top songs, artists, genres, and more.
 
-## Features
-- **Top Songs Analysis**: View your most-played songs over short, medium, and long-term periods.
-- **Audio Features Insights**: Explore detailed audio features of your top tracks, including danceability, energy, and valence.
-- **User-Friendly Interface**: Interact with a clean and intuitive interface built with Streamlit.
+## Key Features
+
+- **Top Song Analysis:** Explore your favorite tracks categorized into short-term, medium-term, and long-term periods. Each track's audio features such as danceability, energy, and valence are analyzed and visualized using interactive bar charts.
+- **Market Comparison:** Gain insights into Spotify's stock performance over time, compared with other major music platforms. This feature uses Yahoo Finance data and presents the data with interactive line charts.
+- **Artist Insights:** Discover your followed and recently played artists, along with details about their top tracks and albums. Artist profiles include images and direct links to Spotify for further exploration.
+- **Genre Visualization:** Visualize your top genres using interactive pie charts and bar graphs. This feature aggregates data from your top artists' genres, providing a clear picture of your music preferences.
+- **User Profile:** Display your Spotify user profile details, including the currently playing track, recently played tracks, total listening time, and other relevant information.
 
 ## Technologies Used
-- **Pandas**: For data manipulation and analysis.
-- **Streamlit**: To create a web application interface.
-- **Spotipy**: A Python library for the Spotify Web API.
+
+- **Python Libraries:** Spotipy, Streamlit, Altair, Plotly, Pandas
+- **Data Sources:** Spotify API for music data, Yahoo Finance API for stock data
+- **Frontend:** HTML and CSS for custom styling to enhance user experience
 
 ## Installation
 
@@ -25,35 +29,30 @@ Spotify Top Songs Analysis is a web application that leverages the Spotify API t
    git clone https://github.com/DharaniIlango/Spotify_Analysis
    cd Spotify_Analysis
    ```
-2. **Create a virtual environment and activate it**
-   ```sh
-   python -m venv venv
-   source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
-   ```
-3. **Install the required dependencies**
+2. **Install the required dependencies**
    ```sh
    pip install -r requirements.txt
    ```
-4. **Set up Spotify API credentials**
-   -> Create a .env file in the project root directory.
+3. **Set up Spotify API credentials**
    -> Add your Spotify API credentials:
    ```sh
    SPOTIPY_CLIENT_ID='your_client_id'
    SPOTIPY_CLIENT_SECRET='your_client_secret'
    SPOTIPY_REDIRECT_URI='your_redirect_uri'
    ```
-5. **Run the Streamlit application**
+4. **Run the Streamlit application**
    ```sh
-   streamlit run Top_Songs_Analysis.py
+   streamlit run main.py
    ```
    
 ### Project Structure
 ```sh
 Spotify_Analysis/
 │
-├── Top_Songs_Analysis.py   # Main application file
+├── main.py                 # Main application file
 ├── requirements.txt        # Python dependencies
-├── .env                    # Environment variables (included in the repo, needs to be initialized)
+├── .streamlit
+|     └──config.toml        # Cofiguration File (included in the repo, needs to be initialized)
 └── README.md               # Project documentation
 ```
 
