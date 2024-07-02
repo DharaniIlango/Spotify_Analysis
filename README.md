@@ -52,7 +52,7 @@ Spotify_Analysis/
 ├── main.py                 # Main application file
 ├── requirements.txt        # Python dependencies
 ├── .streamlit
-|     └──config.toml        # Cofiguration File (included in the repo, needs to be initialized)
+│     └──config.toml        # Cofiguration File (included in the repo, needs to be initialized)
 └── README.md               # Project documentation
 ```
 
