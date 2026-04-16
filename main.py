@@ -1,18 +1,18 @@
 import os
-import spotipy
+import spotipy  # Fix: Import as a standard module to avoid variable name conflict
 from spotipy.oauth2 import SpotifyOAuth
 import streamlit as st
 from streamlit_option_menu import option_menu
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from dotenv import load_dotenv
 
-# --- UI & THEME INITIALIZATION ---
-st.set_page_config(page_title="Audio Analytics Deep-Dive", page_icon="🎧", layout="wide", initial_sidebar_state="expanded")
+# --- 1. UI CONFIGURATION (MUST BE THE ABSOLUTE FIRST STREAMLIT COMMAND) ---
+st.set_page_config(page_title="Synapse Audio Intelligence", page_icon="🎧", layout="wide", initial_sidebar_state="expanded")
 
+# --- 2. THEME & STYLING ---
 st.markdown("""
     <style>
     .stApp { background-color: #0E1117; color: #FAFAFA; }
@@ -23,7 +23,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- AUTHENTICATION ---
+# --- 3. AUTHENTICATION & CLIENT INITIALIZATION ---
 load_dotenv()
 CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID') or st.secrets.get("SPOTIFY_CLIENT_ID")
 CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET') or st.secrets.get("SPOTIFY_CLIENT_SECRET")
@@ -31,62 +31,112 @@ REDIRECT_URI = os.getenv('SPOTIFY_REDIRECT_URI') or st.secrets.get("SPOTIFY_REDI
 
 @st.cache_resource
 def authenticate_spotify():
+    """Initializes and returns the authenticated Spotify client."""
+    all_scopes = (
+        'user-read-private user-read-email user-library-read '
+        'playlist-read-private playlist-read-collaborative playlist-modify-private playlist-modify-public '
+        'user-top-read user-read-recently-played user-read-playback-position '
+        'user-read-playback-state user-modify-playback-state user-read-currently-playing '
+        'user-follow-read'
+    )
+    
+    # Return an instance of the Spotify client
     return spotipy.Spotify(
         auth_manager=SpotifyOAuth(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             redirect_uri=REDIRECT_URI,
-            scope='user-top-read user-read-recently-played user-read-currently-playing'
+            scope=all_scopes
         )
     )
 
-sp = authenticate_spotify()
+# Initialize the client globally as 'spotify_client' to avoid confusion
+spotify_client = authenticate_spotify()
 
-# --- DATA PIPELINE ---
+# --- 4. DATA PIPELINE (UPGRADED FOR AUDIOPHILE PLAYLISTS) ---
 @st.cache_data(ttl=3600)
-def fetch_analytics_dataset(): 
-    # 1. Fetch the first 50 tracks
-    tracks_batch_1 = sp.current_user_top_tracks(limit=50, offset=0, time_range='long_term')
-    
-    if not tracks_batch_1['items']:
-        return pd.DataFrame()
-        
-    # 2. Fetch the next 50 tracks
-    tracks_batch_2 = sp.current_user_top_tracks(limit=50, offset=50, time_range='long_term')
-    
-    # Combine the two lists to get our 100 tracks for the ML model
-    all_tracks = tracks_batch_1['items'] + tracks_batch_2['items']
-    
-    track_ids = [t['id'] for t in all_tracks]
-    
-    # 3. Fetch Audio Features in safe batches of 50
-    features = []
-    for i in range(0, len(track_ids), 50):
-        batch = track_ids[i:i+50]
-        batch_features = sp.audio_features(batch)
-        features.extend([f for f in batch_features if f is not None])
-    
-    # 4. Merge Data
-    df_features = pd.DataFrame(features)
-    df_meta = pd.DataFrame([{
-        'id': t['id'],
-        'name': t['name'],
-        'artist': t['artists'][0]['name'],
-        'album_cover': t['album']['images'][0]['url'] if t['album']['images'] else None,
-        'popularity': t['popularity']
-    } for t in all_tracks])
-    
-    return pd.merge(df_meta, df_features, on='id')
+def get_user_playlists():
+    """Fetches the user's playlists for the sidebar dropdown."""
+    # Use the initialized client instance
+    playlists_data = spotify_client.current_user_playlists(limit=50)
+    return {p['name']: p['id'] for p in playlists_data.get('items', []) if p is not None}
 
-# --- SIDEBAR ROUTING ---
+@st.cache_data(ttl=3600)
+def fetch_analytics_dataset(source_id="top_tracks"): 
+    """Extracts metadata from Top Tracks or a specific Playlist ID."""
+    all_tracks = []
+    
+    if source_id == "top_tracks":
+        # Fetches user's long-term top tracks in two batches
+        t1 = spotify_client.current_user_top_tracks(limit=50, offset=0, time_range='long_term')
+        t2 = spotify_client.current_user_top_tracks(limit=50, offset=50, time_range='long_term')
+        all_tracks = t1.get('items', []) + t2.get('items', [])
+    else:
+        # Audiophile Logic: Infinite loop to extract 200+ song playlists
+        offset = 0
+        while True:
+            results = spotify_client.playlist_items(source_id, limit=100, offset=offset)
+            items = results.get('items', [])
+            if not items:
+                break
+            
+            valid_tracks = [item['track'] for item in items if item and item.get('track')]
+            all_tracks.extend(valid_tracks)
+            
+            if len(items) < 100:
+                break
+            offset += 100
+            
+    # Extract metadata safely (Pivoted to metadata to avoid deprecated audio_features endpoint)
+    data = []
+    for t in all_tracks:
+        if not t: 
+            continue
+            
+        album = t.get('album', {})
+        release_date = album.get('release_date', '')
+        release_year = int(release_date.split('-')[0]) if release_date else 2000
+        
+        images = album.get('images', [])
+        album_cover = images[0]['url'] if images else None
+        
+        artists = t.get('artists', [])
+        artist_name = artists[0]['name'] if artists else "Unknown Artist"
+        
+        data.append({
+            'id': t.get('id', 'local_or_unknown'),
+            'name': t.get('name', 'Unknown Track'),
+            'artist': artist_name,
+            'album_cover': album_cover,
+            'popularity': t.get('popularity', 0),
+            'duration_m': t.get('duration_ms', 0) / 60000,
+            'explicit': 1 if t.get('explicit') else 0,
+            'release_year': release_year
+        })
+        
+    return pd.DataFrame(data)
+
+# --- 5. SIDEBAR NAVIGATION & ROUTING ---
 with st.sidebar:
     st.markdown("<h2 style='text-align: center; color: #02ab21;'>SYNAPSE</h2>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center; font-size: 0.8em; color: gray;'>AUDIO INTELLIGENCE</p>", unsafe_allow_html=True)
+    
+    st.write("---")
+    st.markdown("### 🎛️ Data Source")
+    
+    # Dropdown for playlist selection
+    user_playlists = get_user_playlists()
+    source_options = {"🏆 My All-Time Top Tracks": "top_tracks"}
+    source_options.update(user_playlists)
+    
+    selected_source_name = st.selectbox("Select Target:", list(source_options.keys()))
+    selected_source_id = source_options[selected_source_name]
+    
     st.write("---")
     
     route = option_menu(
-        None, ["The Signature", "Psychometrics", "Neural Clustering", "Visual Vault"],
-        icons=["radar", "activity", "cpu", "grid"],
+        None, ["The Profile", "Temporal Dynamics", "Neural Clustering", "Visual Vault"],
+        icons=["person-lines-fill", "clock-history", "cpu", "grid"],
         default_index=0,
         styles={
             "container": {"padding": "0!important", "background-color": "transparent"},
@@ -96,117 +146,87 @@ with st.sidebar:
         }
     )
 
-df = fetch_analytics_dataset(limit=100)
+# Load the dataset based on selection
+df = fetch_analytics_dataset(source_id=selected_source_id)
 
 if df.empty:
-    st.warning("Insufficient data to build analytical models. Keep listening to music!")
+    st.warning("No track data found in this source. Keep listening to music!")
     st.stop()
 
-# --- VIEW 1: THE SIGNATURE ---
-if route == "The Signature":
+# --- 6. MAIN DASHBOARD VIEWS ---
+
+# VIEW 1: THE PROFILE
+if route == "The Profile":
     st.markdown("### Your Sonic Identity")
-    col1, col2 = st.columns([2, 1])
-    
+    col1, col2, col3 = st.columns(3)
     with col1:
-        categories = ['acousticness', 'danceability', 'energy', 'liveness', 'valence']
-        avg_features = df[categories].mean().tolist()
-        avg_features += [avg_features[0]]
-        categories += [categories[0]]
-        
-        fig_radar = go.Figure(data=go.Scatterpolar(
-            r=avg_features, theta=[c.capitalize() for c in categories],
-            fill='toself', fillcolor='rgba(2, 171, 33, 0.4)', line=dict(color='#02ab21', width=2),
-        ))
-        
-        fig_radar.update_layout(
-            polar=dict(
-                radialaxis=dict(visible=True, range=[0, 1], gridcolor="#333333"),
-                angularaxis=dict(gridcolor="#333333", tickfont=dict(color="white", size=14)),
-                bgcolor="rgba(0,0,0,0)"
-            ),
-            paper_bgcolor="rgba(0,0,0,0)", height=500
-        )
-        st.plotly_chart(fig_radar, use_container_width=True)
-        
+        st.metric(label="Avg Popularity", value=f"{df['popularity'].mean():.1f}/100")
     with col2:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        st.markdown("#### System Overview")
-        st.metric(label="Total Tracks Analyzed", value=len(df))
-        st.metric(label="Average BPM (Tempo)", value=f"{df['tempo'].mean():.0f}")
+        st.metric(label="Avg Release Era", value=f"{int(df['release_year'].mean())}")
+    with col3:
+        st.metric(label="Avg Duration", value=f"{df['duration_m'].mean():.2f} min")
         
-        current = sp.current_user_playing_track()
-        if current and current['is_playing']:
-            st.write("---")
-            st.markdown("🟢 **Active Stream Detected**")
-            st.caption(f"{current['item']['name']} - {current['item']['artists'][0]['name']}")
-
-# --- VIEW 2: PSYCHOMETRICS ---
-elif route == "Psychometrics":
-    st.markdown("### Behavioral Heatmaps")
-    fig_heat = px.density_heatmap(
-        df, x="tempo", y="energy", nbinsx=15, nbinsy=15,
-        color_continuous_scale=["#0E1117", "#054211", "#02ab21", "#42ff65"],
-        labels={"tempo": "Beats Per Minute", "energy": "Acoustic Energy"}
+    st.write("---")
+    st.markdown("#### Top Artists by Track Count")
+    artist_counts = df['artist'].value_counts().head(10).reset_index()
+    artist_counts.columns = ['Artist', 'Track Count']
+    fig_bar = px.bar(
+        artist_counts, x='Track Count', y='Artist', orientation='h',
+        color='Track Count', color_continuous_scale=["#0E1117", "#02ab21"],
+        template="plotly_dark"
     )
-    fig_heat.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="white"))
-    st.plotly_chart(fig_heat, use_container_width=True)
+    fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
+    st.plotly_chart(fig_bar, use_container_width=True)
 
-# --- VIEW 3: NEURAL CLUSTERING (MACHINE LEARNING) ---
+# VIEW 2: TEMPORAL DYNAMICS
+elif route == "Temporal Dynamics":
+    st.markdown("### Nostalgia vs. Mainstream")
+    fig_scatter = px.scatter(
+        df, x="release_year", y="popularity", 
+        size="duration_m", color="explicit",
+        hover_name="name", hover_data=["artist"],
+        color_continuous_scale=["#02ab21", "#ff4b4b"],
+        labels={"release_year": "Release Year", "popularity": "Fame Index (Popularity)"},
+        template="plotly_dark"
+    )
+    fig_scatter.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig_scatter, use_container_width=True)
+
+# VIEW 3: NEURAL CLUSTERING (MACHINE LEARNING)
 elif route == "Neural Clustering":
-    st.markdown("### Unsupervised Vibe Clustering")
-    st.markdown("Using K-Means to autonomously group your music based on audio geometry, overriding standard genres.")
+    st.markdown("### Unsupervised Metadata Clustering")
     
-    # 1. Prepare and Scale the Data
-    ml_features = ['danceability', 'energy', 'valence', 'acousticness', 'instrumentalness']
-    X = df[ml_features]
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # Scaling and Clustering
+    ml_features = ['popularity', 'duration_m', 'release_year']
+    X_scaled = StandardScaler().fit_transform(df[ml_features])
     
-    # 2. Apply K-Means Algorithm
-    num_clusters = 4
-    kmeans = KMeans(n_clusters=num_clusters, random_state=42, n_init='auto')
+    kmeans = KMeans(n_clusters=4, random_state=42, n_init='auto')
     df['Cluster'] = kmeans.fit_predict(X_scaled)
-    df['Cluster_Name'] = df['Cluster'].apply(lambda x: f"Vibe Cluster {x+1}")
+    df['Cluster_Name'] = df['Cluster'].apply(lambda x: f"Cluster {x+1}")
     
-    # 3. 3D Plotly Visualization
     fig_cluster = px.scatter_3d(
-        df, x='valence', y='energy', z='danceability',
+        df, x='release_year', y='popularity', z='duration_m',
         color='Cluster_Name', hover_name='name', hover_data=['artist'],
-        color_discrete_sequence=["#02ab21", "#ffffff", "#555555", "#888888"],
-        title="3D Sonic Landscape"
+        color_discrete_sequence=["#02ab21", "#ffffff", "#555555", "#888888"]
     )
     fig_cluster.update_layout(
         scene=dict(
-            xaxis_title='Positivity (Valence)', yaxis_title='Intensity (Energy)', zaxis_title='Groove',
+            xaxis_title='Era (Year)', yaxis_title='Fame (Popularity)', zaxis_title='Length (Mins)',
             xaxis=dict(backgroundcolor="#0E1117", gridcolor="#333", showbackground=True),
             yaxis=dict(backgroundcolor="#0E1117", gridcolor="#333", showbackground=True),
             zaxis=dict(backgroundcolor="#0E1117", gridcolor="#333", showbackground=True),
         ),
-        paper_bgcolor="rgba(0,0,0,0)", font=dict(color="white"), height=600,
-        legend=dict(title="")
+        paper_bgcolor="rgba(0,0,0,0)", height=700
     )
     st.plotly_chart(fig_cluster, use_container_width=True)
-    
-    # 4. Display the AI Groupings
-    st.markdown("### The AI's Groupings")
-    tabs = st.tabs([f"Cluster {i+1}" for i in range(num_clusters)])
-    
-    for i, tab in enumerate(tabs):
-        with tab:
-            cluster_df = df[df['Cluster'] == i][['name', 'artist', 'tempo', 'popularity']]
-            st.dataframe(cluster_df.reset_index(drop=True), use_container_width=True)
 
-# --- VIEW 4: VISUAL VAULT ---
+# VIEW 4: VISUAL VAULT
 elif route == "Visual Vault":
     st.markdown("### The Visual Vault")
-    st.write("---")
-    
     num_cols = 4
     cols = st.columns(num_cols)
-    
     for i, row in df.iterrows():
         if row['album_cover']:
             with cols[i % num_cols]:
                 st.image(row['album_cover'], use_column_width=True)
-                st.markdown(f"<p style='font-size: 0.85em; text-align: center; margin-top: -10px;'><b>{row['name']}</b><br><span style='color: gray;'>{row['artist']}</span></p>", unsafe_allow_html=True)
-                st.write("")
+                st.markdown(f"<p style='font-size: 0.85em; text-align: center;'><b>{row['name']}</b><br>{row['artist']}</p>", unsafe_allow_html=True)
