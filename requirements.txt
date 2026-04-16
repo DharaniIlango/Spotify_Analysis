@@ -6,3 +6,4 @@ streamlit==1.36.0
 streamlit-option-menu==0.3.13
 yfinance==0.2.40
 python-dotenv==1.0.0
+scikit-learn

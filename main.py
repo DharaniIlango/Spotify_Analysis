@@ -1,163 +1,212 @@
 import os
-import datetime
-import webbrowser
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import streamlit as st
 from streamlit_option_menu import option_menu
-import yfinance as yf
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
 from dotenv import load_dotenv
 
-# Load environment variables (Local) or use Streamlit Secrets (Production)
-load_dotenv()
-CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID') or st.secrets["SPOTIFY_CLIENT_ID"]
-CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET') or st.secrets["SPOTIFY_CLIENT_SECRET"]
-REDIRECT_URI = os.getenv('SPOTIFY_REDIRECT_URI') or st.secrets["SPOTIFY_REDIRECT_URI"]
+# --- UI & THEME INITIALIZATION ---
+st.set_page_config(page_title="Audio Analytics Deep-Dive", page_icon="🎧", layout="wide", initial_sidebar_state="expanded")
 
-# Initialize Spotify Client
+st.markdown("""
+    <style>
+    .stApp { background-color: #0E1117; color: #FAFAFA; }
+    .stProgress > div > div > div > div { background-color: #02ab21; }
+    h1, h2, h3 { font-family: 'Helvetica Neue', sans-serif; font-weight: 300; }
+    .css-1v0mbdj > img { border-radius: 10px; transition: transform 0.3s ease; }
+    .css-1v0mbdj > img:hover { transform: scale(1.02); }
+    </style>
+""", unsafe_allow_html=True)
+
+# --- AUTHENTICATION ---
+load_dotenv()
+CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID') or st.secrets.get("SPOTIFY_CLIENT_ID")
+CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET') or st.secrets.get("SPOTIFY_CLIENT_SECRET")
+REDIRECT_URI = os.getenv('SPOTIFY_REDIRECT_URI') or st.secrets.get("SPOTIFY_REDIRECT_URI")
+
 @st.cache_resource
-def get_spotify_client():
+def authenticate_spotify():
     return spotipy.Spotify(
         auth_manager=SpotifyOAuth(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             redirect_uri=REDIRECT_URI,
-            scope='user-read-recently-played user-top-read user-read-private user-read-email user-follow-read user-library-read user-read-playback-state user-read-currently-playing'
+            scope='user-top-read user-read-recently-played user-read-currently-playing'
         )
     )
 
-sp = get_spotify_client()
+sp = authenticate_spotify()
 
-# UI Configuration
-st.set_page_config(page_title="Spotify Analytics", page_icon="🎧", layout='wide')
-
-# --- DATA FETCHING (CACHED FOR PERFORMANCE) ---
-@st.cache_data(ttl=3600) # Caches data for 1 hour to reduce API calls
-def fetch_top_tracks(time_range='short_term', limit=50):
-    tracks = sp.current_user_top_tracks(limit=limit, time_range=time_range)
-    if not tracks['items']:
+# --- DATA PIPELINE ---
+@st.cache_data(ttl=3600)
+def fetch_analytics_dataset(): 
+    # 1. Fetch the first 50 tracks
+    tracks_batch_1 = sp.current_user_top_tracks(limit=50, offset=0, time_range='long_term')
+    
+    if not tracks_batch_1['items']:
         return pd.DataFrame()
         
-    track_ids = [track['id'] for track in tracks['items']]
-    audio_features = sp.audio_features(track_ids)
+    # 2. Fetch the next 50 tracks
+    tracks_batch_2 = sp.current_user_top_tracks(limit=50, offset=50, time_range='long_term')
     
-    df = pd.DataFrame(audio_features)
-    df['track_name'] = [track['name'] for track in tracks['items']]
-    df['artist_name'] = [track['artists'][0]['name'] for track in tracks['items']]
-    return df[['track_name', 'artist_name', 'danceability', 'energy', 'valence', 'tempo']]
+    # Combine the two lists to get our 100 tracks for the ML model
+    all_tracks = tracks_batch_1['items'] + tracks_batch_2['items']
+    
+    track_ids = [t['id'] for t in all_tracks]
+    
+    # 3. Fetch Audio Features in safe batches of 50
+    features = []
+    for i in range(0, len(track_ids), 50):
+        batch = track_ids[i:i+50]
+        batch_features = sp.audio_features(batch)
+        features.extend([f for f in batch_features if f is not None])
+    
+    # 4. Merge Data
+    df_features = pd.DataFrame(features)
+    df_meta = pd.DataFrame([{
+        'id': t['id'],
+        'name': t['name'],
+        'artist': t['artists'][0]['name'],
+        'album_cover': t['album']['images'][0]['url'] if t['album']['images'] else None,
+        'popularity': t['popularity']
+    } for t in all_tracks])
+    
+    return pd.merge(df_meta, df_features, on='id')
 
-# --- SIDEBAR NAVIGATION ---
+# --- SIDEBAR ROUTING ---
 with st.sidebar:
-    st.markdown("### 🎧 :green[Dashboard]")
-    selected = option_menu(
-        "", 
-        ["Overview", "Mood Analysis", "Artists", "User"],
-        icons=["globe", "activity", "stars", "person"],
+    st.markdown("<h2 style='text-align: center; color: #02ab21;'>SYNAPSE</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; font-size: 0.8em; color: gray;'>AUDIO INTELLIGENCE</p>", unsafe_allow_html=True)
+    st.write("---")
+    
+    route = option_menu(
+        None, ["The Signature", "Psychometrics", "Neural Clustering", "Visual Vault"],
+        icons=["radar", "activity", "cpu", "grid"],
         default_index=0,
         styles={
-            "container": {"background-color": "transparent"},
-            "nav-link-selected": {"background-color": "#02ab21"},
+            "container": {"padding": "0!important", "background-color": "transparent"},
+            "icon": {"color": "white", "font-size": "18px"},
+            "nav-link": {"font-size": "16px", "text-align": "left", "margin": "0px", "--hover-color": "#262730"},
+            "nav-link-selected": {"background-color": "#02ab21", "font-weight": "300"},
         }
     )
 
-# --- VIEW: OVERVIEW ---
-if selected == "Overview":
-    st.title("Market Overview")
-    st.markdown("Tracking the corporate performance of leading music streaming infrastructure.")
+df = fetch_analytics_dataset(limit=100)
+
+if df.empty:
+    st.warning("Insufficient data to build analytical models. Keep listening to music!")
+    st.stop()
+
+# --- VIEW 1: THE SIGNATURE ---
+if route == "The Signature":
+    st.markdown("### Your Sonic Identity")
+    col1, col2 = st.columns([2, 1])
     
-    tickers = {"Spotify": "SPOT", "Apple": "AAPL", "Amazon": "AMZN"}
-    selected_tickers = st.multiselect("Select Platforms to Compare", list(tickers.keys()), default=["Spotify"])
-    
-    if selected_tickers:
-        ticker_symbols = [tickers[t] for t in selected_tickers]
-        stock_data = yf.download(ticker_symbols, period="1y")['Close']
+    with col1:
+        categories = ['acousticness', 'danceability', 'energy', 'liveness', 'valence']
+        avg_features = df[categories].mean().tolist()
+        avg_features += [avg_features[0]]
+        categories += [categories[0]]
         
-        if len(selected_tickers) == 1:
-            stock_data = stock_data.to_frame(name=ticker_symbols[0])
-            
-        stock_data.reset_index(inplace=True)
-        stock_data_melted = stock_data.melt(id_vars='Date', var_name='Stock', value_name='Price')
+        fig_radar = go.Figure(data=go.Scatterpolar(
+            r=avg_features, theta=[c.capitalize() for c in categories],
+            fill='toself', fillcolor='rgba(2, 171, 33, 0.4)', line=dict(color='#02ab21', width=2),
+        ))
         
-        fig = px.line(
-            stock_data_melted, x='Date', y='Price', color='Stock',
-            color_discrete_map={'SPOT': '#02ab21', 'AAPL': '#ffffff', 'AMZN': '#146eb4'},
-            template="plotly_dark"
+        fig_radar.update_layout(
+            polar=dict(
+                radialaxis=dict(visible=True, range=[0, 1], gridcolor="#333333"),
+                angularaxis=dict(gridcolor="#333333", tickfont=dict(color="white", size=14)),
+                bgcolor="rgba(0,0,0,0)"
+            ),
+            paper_bgcolor="rgba(0,0,0,0)", height=500
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig_radar, use_container_width=True)
+        
+    with col2:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown("#### System Overview")
+        st.metric(label="Total Tracks Analyzed", value=len(df))
+        st.metric(label="Average BPM (Tempo)", value=f"{df['tempo'].mean():.0f}")
+        
+        current = sp.current_user_playing_track()
+        if current and current['is_playing']:
+            st.write("---")
+            st.markdown("🟢 **Active Stream Detected**")
+            st.caption(f"{current['item']['name']} - {current['item']['artists'][0]['name']}")
 
-# --- VIEW: NEW STATISTICAL ANALYSIS (MOOD QUADRANT) ---
-if selected == "Mood Analysis":
-    st.title("Behavioral Audio Analysis")
-    st.markdown("Mapping your listening habits based on track psychology (Valence vs. Energy).")
-    
-    time_range = st.radio("Select Time Range", ['short_term', 'medium_term', 'long_term'], horizontal=True, format_func=lambda x: x.replace('_', ' ').title())
-    
-    df = fetch_top_tracks(time_range=time_range)
-    
-    if not df.empty:
-        fig = px.scatter(
-            df, x="valence", y="energy", 
-            hover_name="track_name", hover_data=["artist_name"],
-            color="danceability", color_continuous_scale=["#121212", "#02ab21"],
-            title="Your Audio Mood Quadrant",
-            labels={"valence": "Positivity (Valence)", "energy": "Intensity (Energy)"},
-            template="plotly_dark"
-        )
-        
-        fig.add_hline(y=0.5, line_dash="dot", line_color="gray")
-        fig.add_vline(x=0.5, line_dash="dot", line_color="gray")
-        
-        fig.add_annotation(x=0.25, y=0.75, text="Angry / Tense", showarrow=False, font=dict(color="white", size=14))
-        fig.add_annotation(x=0.75, y=0.75, text="Happy / Energetic", showarrow=False, font=dict(color="#02ab21", size=14))
-        fig.add_annotation(x=0.25, y=0.25, text="Sad / Depressing", showarrow=False, font=dict(color="white", size=14))
-        fig.add_annotation(x=0.75, y=0.25, text="Chill / Peaceful", showarrow=False, font=dict(color="white", size=14))
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.markdown("### Track Data Breakdown")
-        st.dataframe(df.style.background_gradient(cmap='Greens', subset=['danceability']), use_container_width=True)
-    else:
-        st.warning("No track data found for this time range.")
+# --- VIEW 2: PSYCHOMETRICS ---
+elif route == "Psychometrics":
+    st.markdown("### Behavioral Heatmaps")
+    fig_heat = px.density_heatmap(
+        df, x="tempo", y="energy", nbinsx=15, nbinsy=15,
+        color_continuous_scale=["#0E1117", "#054211", "#02ab21", "#42ff65"],
+        labels={"tempo": "Beats Per Minute", "energy": "Acoustic Energy"}
+    )
+    fig_heat.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="white"))
+    st.plotly_chart(fig_heat, use_container_width=True)
 
-# --- VIEW: ARTISTS (CLEANED UP GRID) ---
-if selected == "Artists":
-    st.title("Artist Insights")
-    followed_artists_response = sp.current_user_followed_artists(limit=8)
-    followed_artists = followed_artists_response['artists']['items']
+# --- VIEW 3: NEURAL CLUSTERING (MACHINE LEARNING) ---
+elif route == "Neural Clustering":
+    st.markdown("### Unsupervised Vibe Clustering")
+    st.markdown("Using K-Means to autonomously group your music based on audio geometry, overriding standard genres.")
     
-    if followed_artists:
-        cols = st.columns(4)
-        for index, artist in enumerate(followed_artists):
-            with cols[index % 4]:
-                if artist.get('images'):
-                    st.image(artist['images'][0]['url'], use_column_width=True)
-                st.markdown(f"**{artist['name']}**")
-                st.caption(f"Followers: {artist['followers']['total']:,}")
-    else:
-        st.info("You don't follow any artists yet.")
+    # 1. Prepare and Scale the Data
+    ml_features = ['danceability', 'energy', 'valence', 'acousticness', 'instrumentalness']
+    X = df[ml_features]
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    # 2. Apply K-Means Algorithm
+    num_clusters = 4
+    kmeans = KMeans(n_clusters=num_clusters, random_state=42, n_init='auto')
+    df['Cluster'] = kmeans.fit_predict(X_scaled)
+    df['Cluster_Name'] = df['Cluster'].apply(lambda x: f"Vibe Cluster {x+1}")
+    
+    # 3. 3D Plotly Visualization
+    fig_cluster = px.scatter_3d(
+        df, x='valence', y='energy', z='danceability',
+        color='Cluster_Name', hover_name='name', hover_data=['artist'],
+        color_discrete_sequence=["#02ab21", "#ffffff", "#555555", "#888888"],
+        title="3D Sonic Landscape"
+    )
+    fig_cluster.update_layout(
+        scene=dict(
+            xaxis_title='Positivity (Valence)', yaxis_title='Intensity (Energy)', zaxis_title='Groove',
+            xaxis=dict(backgroundcolor="#0E1117", gridcolor="#333", showbackground=True),
+            yaxis=dict(backgroundcolor="#0E1117", gridcolor="#333", showbackground=True),
+            zaxis=dict(backgroundcolor="#0E1117", gridcolor="#333", showbackground=True),
+        ),
+        paper_bgcolor="rgba(0,0,0,0)", font=dict(color="white"), height=600,
+        legend=dict(title="")
+    )
+    st.plotly_chart(fig_cluster, use_container_width=True)
+    
+    # 4. Display the AI Groupings
+    st.markdown("### The AI's Groupings")
+    tabs = st.tabs([f"Cluster {i+1}" for i in range(num_clusters)])
+    
+    for i, tab in enumerate(tabs):
+        with tab:
+            cluster_df = df[df['Cluster'] == i][['name', 'artist', 'tempo', 'popularity']]
+            st.dataframe(cluster_df.reset_index(drop=True), use_container_width=True)
 
-# --- VIEW: USER ---
-if selected == "User":    
-    user_profile = sp.current_user()
-    if user_profile:
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            if 'images' in user_profile and user_profile['images']:
-                st.image(user_profile['images'][0]['url'], width=200)
-            st.subheader(user_profile['display_name'])
-            st.caption(f"Followers: {user_profile['followers']['total']}")
-            st.markdown(f"**Country:** {user_profile.get('country', 'N/A')}")
-            
-        with col2:
-            current_playback = sp.current_playback()
-            if current_playback and current_playback['is_playing']:
-                st.success("Currently Listening")
-                track = current_playback['item']
-                if track and 'album' in track and track['album']['images']:
-                    st.image(track['album']['images'][0]['url'], width=100)
-                st.markdown(f"### {track['name']}")
-                st.markdown(f"**{track['artists'][0]['name']}** — *{track['album']['name']}*")
-            else:
-                st.info("No active playback detected on your Spotify account right now.")
+# --- VIEW 4: VISUAL VAULT ---
+elif route == "Visual Vault":
+    st.markdown("### The Visual Vault")
+    st.write("---")
+    
+    num_cols = 4
+    cols = st.columns(num_cols)
+    
+    for i, row in df.iterrows():
+        if row['album_cover']:
+            with cols[i % num_cols]:
+                st.image(row['album_cover'], use_column_width=True)
+                st.markdown(f"<p style='font-size: 0.85em; text-align: center; margin-top: -10px;'><b>{row['name']}</b><br><span style='color: gray;'>{row['artist']}</span></p>", unsafe_allow_html=True)
+                st.write("")
